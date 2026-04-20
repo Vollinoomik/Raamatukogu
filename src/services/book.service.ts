@@ -16,7 +16,7 @@ export class BookService {
     const [author, publisher, existingBook] = await Promise.all([
       prisma.author.findUnique({ where: { id: input.authorId } }),
       prisma.publisher.findUnique({ where: { id: input.publisherId } }),
-      prisma.book.findUnique({ where: { isbn: input.isbn } })
+      prisma.book.findUnique({ where: { isbn: input.isbn } }),
     ]);
 
     if (!author) {
@@ -31,6 +31,23 @@ export class BookService {
       throw createHttpError(409, "Book with this ISBN already exists");
     }
 
+    const existingGenre = await prisma.genre.findFirst({
+      where: {
+        name: {
+          equals: input.genre,
+          mode: "insensitive",
+        },
+      },
+    });
+
+    const genreRecord =
+      existingGenre ??
+      (await prisma.genre.create({
+        data: {
+          name: input.genre,
+        },
+      }));
+
     return prisma.book.create({
       data: {
         title: input.title,
@@ -39,13 +56,16 @@ export class BookService {
         language: input.language,
         pageCount: input.pageCount,
         authorId: input.authorId,
-        publisherId: input.publisherId
+        publisherId: input.publisherId,
+        genres: {
+          connect: [{ id: genreRecord.id }],
+        },
       },
       include: {
         author: true,
         publisher: true,
-        genres: true
-      }
+        genres: true,
+      },
     });
   }
 
@@ -59,32 +79,34 @@ export class BookService {
         ? {
             title: {
               contains: query.title,
-              mode: "insensitive" as const
-            }
+              mode: "insensitive" as const,
+            },
           }
         : {}),
       ...(query.language
         ? {
             language: {
               equals: query.language,
-              mode: "insensitive" as const
-            }
+              mode: "insensitive" as const,
+            },
           }
         : {}),
       ...(query.authorId ? { authorId: query.authorId } : {}),
-      ...(query.publishedYear !== undefined ? { publishedYear: query.publishedYear } : {}),
+      ...(query.publishedYear !== undefined
+        ? { publishedYear: query.publishedYear }
+        : {}),
       ...(query.genre
         ? {
             genres: {
               some: {
                 name: {
                   equals: query.genre,
-                  mode: "insensitive" as const
-                }
-              }
-            }
+                  mode: "insensitive" as const,
+                },
+              },
+            },
           }
-        : {})
+        : {}),
     };
 
     const orderBy =
@@ -101,10 +123,10 @@ export class BookService {
         include: {
           author: true,
           publisher: true,
-          genres: true
-        }
+          genres: true,
+        },
       }),
-      prisma.book.count({ where })
+      prisma.book.count({ where }),
     ]);
 
     const totalPages = Math.max(1, Math.ceil(totalItems / limit));
@@ -117,8 +139,8 @@ export class BookService {
         totalItems,
         itemsPerPage: limit,
         hasNextPage: page < totalPages,
-        hasPreviousPage: page > 1
-      }
+        hasPreviousPage: page > 1,
+      },
     };
   }
 
@@ -129,8 +151,8 @@ export class BookService {
         author: true,
         publisher: true,
         genres: true,
-        reviews: true
-      }
+        reviews: true,
+      },
     });
 
     if (!book) {
@@ -142,7 +164,7 @@ export class BookService {
 
   static async updateBook(id: string, input: UpdateBookInput) {
     const existingBook = await prisma.book.findUnique({
-      where: { id }
+      where: { id },
     });
 
     if (!existingBook) {
@@ -151,7 +173,7 @@ export class BookService {
 
     if (input.authorId) {
       const author = await prisma.author.findUnique({
-        where: { id: input.authorId }
+        where: { id: input.authorId },
       });
 
       if (!author) {
@@ -161,7 +183,7 @@ export class BookService {
 
     if (input.publisherId) {
       const publisher = await prisma.publisher.findUnique({
-        where: { id: input.publisherId }
+        where: { id: input.publisherId },
       });
 
       if (!publisher) {
@@ -173,8 +195,8 @@ export class BookService {
       const bookWithSameIsbn = await prisma.book.findFirst({
         where: {
           isbn: input.isbn,
-          NOT: { id }
-        }
+          NOT: { id },
+        },
       });
 
       if (bookWithSameIsbn) {
@@ -182,20 +204,60 @@ export class BookService {
       }
     }
 
+    let genreUpdate = {};
+
+    if (input.genre) {
+      const existingGenre = await prisma.genre.findFirst({
+        where: {
+          name: {
+            equals: input.genre,
+            mode: "insensitive",
+          },
+        },
+      });
+
+      const genreRecord =
+        existingGenre ??
+        (await prisma.genre.create({
+          data: {
+            name: input.genre,
+          },
+        }));
+
+      genreUpdate = {
+        genres: {
+          set: [{ id: genreRecord.id }],
+        },
+      };
+    }
+
     return prisma.book.update({
       where: { id },
-      data: input,
+      data: {
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.isbn !== undefined ? { isbn: input.isbn } : {}),
+        ...(input.publishedYear !== undefined
+          ? { publishedYear: input.publishedYear }
+          : {}),
+        ...(input.language !== undefined ? { language: input.language } : {}),
+        ...(input.pageCount !== undefined ? { pageCount: input.pageCount } : {}),
+        ...(input.authorId !== undefined ? { authorId: input.authorId } : {}),
+        ...(input.publisherId !== undefined
+          ? { publisherId: input.publisherId }
+          : {}),
+        ...genreUpdate,
+      },
       include: {
         author: true,
         publisher: true,
-        genres: true
-      }
+        genres: true,
+      },
     });
   }
 
   static async deleteBook(id: string): Promise<void> {
     const existingBook = await prisma.book.findUnique({
-      where: { id }
+      where: { id },
     });
 
     if (!existingBook) {
@@ -203,13 +265,13 @@ export class BookService {
     }
 
     await prisma.book.delete({
-      where: { id }
+      where: { id },
     });
   }
 
   static async getAverageRating(id: string) {
     const book = await prisma.book.findUnique({
-      where: { id }
+      where: { id },
     });
 
     if (!book) {
@@ -219,14 +281,16 @@ export class BookService {
     const result = await prisma.review.aggregate({
       where: { bookId: id },
       _avg: { rating: true },
-      _count: { rating: true }
+      _count: { rating: true },
     });
 
     return {
       bookId: id,
       averageRating:
-        result._avg.rating !== null ? Number(result._avg.rating.toFixed(2)) : null,
-      reviewCount: result._count.rating
+        result._avg.rating !== null
+          ? Number(result._avg.rating.toFixed(2))
+          : null,
+      reviewCount: result._count.rating,
     };
   }
 }
